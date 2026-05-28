@@ -75,6 +75,20 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      - name: Add Chinese Simplified language file
+        shell: pwsh
+        run: |
+          $isDir = "C:\Program Files (x86)\Inno Setup 6"
+          if (-not (Test-Path $isDir)) { $isDir = "C:\Program Files\Inno Setup 6" }
+          $langFile = "$isDir\Languages\ChineseSimplified.isl"
+          if (-not (Test-Path $langFile)) {
+            $url = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl"
+            Invoke-WebRequest -Uri $url -OutFile $langFile -UseBasicParsing
+            Write-Host "Downloaded ChineseSimplified.isl to $langFile"
+          } else {
+            Write-Host "ChineseSimplified.isl already exists"
+          }
+
       - name: Compile installer with Inno Setup
         shell: pwsh
         run: |
