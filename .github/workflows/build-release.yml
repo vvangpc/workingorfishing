@@ -1,0 +1,119 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（不带 v 前缀，例如 0.1.0）'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $v = '${{ github.event.inputs.version }}'
+          } else {
+            $v = '${{ github.ref_name }}' -replace '^v', ''
+          }
+          Write-Host "version=$v"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Generate placeholder icon if missing
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "assets/icon.ico")) {
+            python -c "
+          from PIL import Image, ImageDraw, ImageFont
+          img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+          d = ImageDraw.Draw(img)
+          d.ellipse([12, 12, 244, 244], fill=(52, 152, 219, 255))
+          try:
+              font = ImageFont.truetype('arial.ttf', 130)
+          except Exception:
+              font = ImageFont.load_default()
+          d.text((128, 128), 'W', font=font, fill='white', anchor='mm')
+          img.save('assets/icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          print('icon.ico generated')
+          "
+          } else {
+            Write-Host "icon.ico already exists"
+          }
+
+      - name: Build portable single-file exe
+        run: pyinstaller --noconfirm packaging/onefile.spec
+
+      - name: Build onedir for installer
+        run: pyinstaller --noconfirm packaging/onedir.spec
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer with Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+          }
+          & "$iscc" /DMyAppVersion=${{ steps.ver.outputs.version }} packaging/installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: List artifacts
+        shell: pwsh
+        run: |
+          Write-Host "--- dist/ ---"
+          Get-ChildItem -Path dist -Recurse -File | Select-Object FullName,Length | Format-Table
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WorkingorFishing-portable
+          path: dist/WorkingorFishing-portable.exe
+          if-no-files-found: error
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WorkingorFishing-installer
+          path: dist/installer/*.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: WorkingorFishing ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/WorkingorFishing-portable.exe
+            dist/installer/*.exe

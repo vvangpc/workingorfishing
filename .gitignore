@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# 运行时生成
+data/
+config/settings.yaml
+config/rules.yaml
+app.log
+*.log
+
+# 打包产物
+build/
+dist/
+*.spec.bak
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
