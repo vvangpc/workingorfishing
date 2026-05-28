@@ -5,7 +5,6 @@ import logging
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Optional
 
 import httpx
 
@@ -65,26 +64,61 @@ def import_from_zip(
 # --- WebDAV ---
 
 class WebDAVClient:
-    """极简 WebDAV 客户端：PUT / GET / PROPFIND。不依赖第三方 WebDAV 库。"""
+    """极简 WebDAV 客户端：PUT / GET / PROPFIND / MKCOL。不依赖第三方 WebDAV 库。
+
+    适配坚果云：坚果云 `/dav/` 根目录不允许 PUT；必须建子目录后再上传。
+    本客户端默认在用户给的 URL 下追加 `WorkingorFishing/` 子目录，
+    并在首次上传前自动 MKCOL 该子目录。
+    """
+
+    SUB_FOLDER = "WorkingorFishing"
 
     def __init__(self, url: str, username: str, password: str, timeout: float = 30.0):
         if not url:
             raise ValueError("WebDAV URL 为空")
-        self.url = url.rstrip("/") + "/"
+        base = url.rstrip("/") + "/"
+        # 如果用户给的 URL 已经以 WorkingorFishing/ 结尾就尊重；否则自动追加
+        lower = base.lower().rstrip("/")
+        if lower.endswith("/" + self.SUB_FOLDER.lower()):
+            self.url = base
+        else:
+            self.url = base + self.SUB_FOLDER + "/"
         self.auth = (username, password)
         self.timeout = timeout
+        self._dir_ensured = False
+
+    def _ensure_dir(self) -> tuple[bool, str]:
+        """对目标子目录做 MKCOL。已存在 (405/301) 也算成功。"""
+        if self._dir_ensured:
+            return True, "OK"
+        try:
+            r = httpx.request(
+                "MKCOL", self.url, auth=self.auth, timeout=self.timeout,
+            )
+            # 201 Created / 200 OK：创建成功
+            # 405 Method Not Allowed / 301 Moved Permanently：目录已存在
+            if r.status_code in (200, 201, 204, 301, 405):
+                self._dir_ensured = True
+                return True, f"目录就绪 (HTTP {r.status_code})"
+            if r.status_code == 401:
+                return False, "认证失败 (HTTP 401)"
+            return False, f"MKCOL 失败 HTTP {r.status_code}"
+        except Exception as e:
+            return False, f"MKCOL 异常: {e}"
 
     def test(self) -> tuple[bool, str]:
         try:
             r = httpx.request(
                 "PROPFIND",
-                self.url,
+                self.url.rsplit("/", 2)[0] + "/",  # 用父级测试，避免子目录未建时直接 404
                 auth=self.auth,
                 headers={"Depth": "0"},
                 timeout=self.timeout,
             )
             if r.status_code in (200, 207):
-                return True, f"连接成功 (HTTP {r.status_code})"
+                # 顺手把子目录建好
+                ok, msg = self._ensure_dir()
+                return True, f"连接成功 (HTTP {r.status_code})，{msg}"
             if r.status_code == 401:
                 return False, "认证失败 (HTTP 401)"
             if r.status_code == 404:
@@ -98,17 +132,27 @@ class WebDAVClient:
     def upload(self, remote_name: str, local_path: Path) -> tuple[bool, str]:
         if not local_path.exists():
             return False, f"{remote_name}: 本地不存在"
+        # 推送前确保目录存在
+        ok, msg = self._ensure_dir()
+        if not ok:
+            return False, f"{remote_name}: {msg}"
         try:
             with open(local_path, "rb") as f:
                 content = f.read()
+            target = self.url + remote_name
             r = httpx.put(
-                self.url + remote_name,
-                content=content,
-                auth=self.auth,
-                timeout=self.timeout,
+                target, content=content,
+                auth=self.auth, timeout=self.timeout,
             )
             if r.status_code in (200, 201, 204):
                 return True, f"{remote_name}: 上传 OK ({len(content)} bytes)"
+            # 404 兜底：再尝试一次 MKCOL 然后重 PUT
+            if r.status_code == 404:
+                self._dir_ensured = False
+                self._ensure_dir()
+                r = httpx.put(target, content=content, auth=self.auth, timeout=self.timeout)
+                if r.status_code in (200, 201, 204):
+                    return True, f"{remote_name}: 上传 OK ({len(content)} bytes)"
             return False, f"{remote_name}: HTTP {r.status_code}"
         except Exception as e:
             return False, f"{remote_name}: {e}"

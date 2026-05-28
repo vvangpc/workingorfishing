@@ -77,3 +77,12 @@ def db_file() -> Path:
 
 def icon_file() -> Path:
     return assets_dir() / "icon.ico"
+
+
+def floating_image(state: str) -> Path:
+    """悬浮窗图片主题：assets/floating/float_<state>.png"""
+    # 状态归一：work/fishing/neutral/idle/paused，paused 复用 idle
+    s = state if state in ("work", "fishing", "neutral", "idle") else "neutral"
+    if state == "paused":
+        s = "idle"
+    return assets_dir() / "floating" / f"float_{s}.png"

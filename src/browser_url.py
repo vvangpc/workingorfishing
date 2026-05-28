@@ -100,6 +100,18 @@ _URL_CANDIDATE_CONTROL_TYPES = {
 }
 
 
+# 地址栏控件缓存：hwnd → control（同一窗口反复采样时省去整棵树遍历）
+_addr_cache: dict[int, object] = {}
+_ADDR_CACHE_MAX = 16
+
+
+def _cache_put(hwnd: int, ctrl) -> None:
+    if len(_addr_cache) >= _ADDR_CACHE_MAX:
+        for k in list(_addr_cache.keys())[:4]:
+            _addr_cache.pop(k, None)
+    _addr_cache[hwnd] = ctrl
+
+
 def _enum_value_controls(control, max_depth: int = 14):
     """生成器：递归 yield 可能含 URL 的控件（Edit / ComboBox / Custom 等）。"""
     if max_depth < 0:
@@ -133,7 +145,6 @@ def _safe_get_value(control) -> Optional[str]:
 
 
 def _find_address_edit(window, names: tuple[str, ...]):
-    uia = _get_uia()
     # 1) 精确 Name 匹配（最快）
     for name in names:
         try:
@@ -207,7 +218,18 @@ def _normalize(raw: Optional[str]) -> Optional[str]:
 
 def _get_chromium(hwnd: int) -> Optional[str]:
     uia = _get_uia()
-    # 1) 先发 WM_GETOBJECT 唤醒 a11y（首次不一定立即生效，但累积调用会让 Chrome 构树）
+    # 0) 命中缓存就直接读，省去遍历整个 UI 树
+    cached = _addr_cache.get(hwnd)
+    if cached is not None:
+        try:
+            val = _safe_get_value(cached)
+            if val:
+                return val
+        except Exception:
+            pass
+        _addr_cache.pop(hwnd, None)  # 缓存失效，丢掉
+
+    # 1) 先发 WM_GETOBJECT 唤醒 a11y
     _nudge_accessibility(hwnd)
     window = uia.ControlFromHandle(hwnd)
     if window is None:
@@ -216,6 +238,7 @@ def _get_chromium(hwnd: int) -> Optional[str]:
     if edit is not None:
         val = _safe_get_value(edit)
         if val:
+            _cache_put(hwnd, edit)
             return val
     # 2) 第一次没读到 → 再 nudge + 短延迟 + 重试一次
     _nudge_accessibility(hwnd)
@@ -226,18 +249,33 @@ def _get_chromium(hwnd: int) -> Optional[str]:
     edit = _find_address_edit(window, _CHROMIUM_NAMES)
     if edit is None:
         return None
-    return _safe_get_value(edit)
+    val = _safe_get_value(edit)
+    if val:
+        _cache_put(hwnd, edit)
+    return val
 
 
 def _get_firefox(hwnd: int) -> Optional[str]:
     uia = _get_uia()
+    cached = _addr_cache.get(hwnd)
+    if cached is not None:
+        try:
+            val = _safe_get_value(cached)
+            if val:
+                return val
+        except Exception:
+            pass
+        _addr_cache.pop(hwnd, None)
     window = uia.ControlFromHandle(hwnd)
     if window is None:
         return None
     edit = _find_address_edit(window, _FIREFOX_NAMES)
     if edit is None:
         return None
-    return _safe_get_value(edit)
+    val = _safe_get_value(edit)
+    if val:
+        _cache_put(hwnd, edit)
+    return val
 
 
 _DISPATCH = {

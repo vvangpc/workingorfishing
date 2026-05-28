@@ -372,8 +372,8 @@ class Storage:
             conditions.append("category = 'unknown'")
         with self._lock:
             cur = self._conn.execute(
-                f"UPDATE activity_log SET category = ?, rule_id = ?"
-                f" WHERE " + " AND ".join(conditions),
+                "UPDATE activity_log SET category = ?, rule_id = ?"
+                " WHERE " + " AND ".join(conditions),
                 [new_category, rule_id] + params,
             )
             return cur.rowcount or 0

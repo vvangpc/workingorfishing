@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QMouseEvent
+from PySide6.QtGui import QAction, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QLabel,
     QMenu,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .paths import floating_image
 from .settings import Settings
 from .storage import Storage, day_range
 from .tray import STATE_COLORS, STATE_LABELS
@@ -158,8 +159,11 @@ class FloatingWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setWindowTitle("WorkingorFishing")
 
+        # 文字主题：彩色圆角条 + 文字
+        # 图片主题：用 assets/floating/float_<state>.png 渲染
         self._state_label = QLabel("中立", self)
         self._state_label.setAlignment(Qt.AlignCenter)
+        self._state_label.setScaledContents(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -169,14 +173,18 @@ class FloatingWindow(QWidget):
         # 独立的时长 overlay
         self._info = _InfoOverlay()
 
-        self._apply_size(settings.floating_window.width, settings.floating_window.height)
+        # 缓存 pixmap：状态 → QPixmap，避免每秒重新读盘
+        self._pixmap_cache: dict[str, QPixmap] = {}
+
+        self._apply_theme_size()
         self._apply_state("neutral")
         self.setWindowOpacity(settings.floating_window.opacity)
         self.move(settings.floating_window.x, settings.floating_window.y)
 
+        # 不显示秒钟，状态变化由 update_state 信号驱动；只用定时器刷新时长缓存
         self._tick_timer = QTimer(self)
         self._tick_timer.timeout.connect(self._tick)
-        self._tick_timer.start(1000)
+        self._tick_timer.start(5000)
         self._tick()
 
     # --- show / hide / move / resize 触发 overlay 同步 ---
@@ -206,13 +214,20 @@ class FloatingWindow(QWidget):
         self._info.resize(self.width(), self.INFO_HEIGHT)
         self._info.move(global_bl.x(), global_bl.y() + self.INFO_GAP)
 
-    # --- 尺寸 ---
+    # --- 尺寸 / 主题 ---
 
-    def _apply_size(self, width: int, height: int) -> None:
-        w = max(40, int(width))
-        h = max(20, int(height))
-        self._state_label.setFixedSize(w, h)
-        self.setFixedSize(w, h)
+    def _apply_theme_size(self) -> None:
+        """根据当前主题应用尺寸。"""
+        fw = self._settings.floating_window
+        if fw.theme == "image":
+            sz = max(48, int(fw.image_size))
+            self._state_label.setFixedSize(sz, sz)
+            self.setFixedSize(sz, sz)
+        else:
+            w = max(40, int(fw.width))
+            h = max(20, int(fw.height))
+            self._state_label.setFixedSize(w, h)
+            self.setFixedSize(w, h)
         self._reposition_info()
 
     # --- 状态 ---
@@ -223,10 +238,17 @@ class FloatingWindow(QWidget):
         self._tick()
 
     def _apply_state(self, state: str) -> None:
+        if self._settings.floating_window.theme == "image":
+            self._apply_image_state(state)
+        else:
+            self._apply_text_state(state)
+
+    def _apply_text_state(self, state: str) -> None:
         color = STATE_COLORS.get(state, STATE_COLORS["neutral"])
         text = STATE_LABELS.get(state, state)
         r, g, b = color.red(), color.green(), color.blue()
         self._state_label.setText(text)
+        self._state_label.setPixmap(QPixmap())  # 清掉图片
         self._state_label.setStyleSheet(
             "QLabel {"
             f" background-color: rgba({r}, {g}, {b}, 220);"
@@ -236,6 +258,29 @@ class FloatingWindow(QWidget):
             " padding: 2px;"
             "}"
         )
+
+    def _apply_image_state(self, state: str) -> None:
+        pix = self._load_pixmap(state)
+        sz = self._state_label.size()
+        if pix.isNull():
+            # 图片缺失 → 退回文字
+            self._apply_text_state(state)
+            return
+        scaled = pix.scaled(
+            sz.width(), sz.height(),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        )
+        self._state_label.setText("")
+        self._state_label.setStyleSheet("background-color: transparent;")
+        self._state_label.setPixmap(scaled)
+
+    def _load_pixmap(self, state: str) -> QPixmap:
+        if state in self._pixmap_cache:
+            return self._pixmap_cache[state]
+        path = floating_image(state)
+        pix = QPixmap(str(path)) if path.exists() else QPixmap()
+        self._pixmap_cache[state] = pix
+        return pix
 
     # --- 心跳 ---
 
@@ -317,7 +362,9 @@ class FloatingWindow(QWidget):
 
     def apply_settings(self, settings: Settings) -> None:
         self._settings = settings
-        self._apply_size(settings.floating_window.width, settings.floating_window.height)
+        self._pixmap_cache.clear()  # 主题切换时清缓存
+        self._apply_theme_size()
+        self._apply_state(self._current_state)
         self.setWindowOpacity(settings.floating_window.opacity)
         if settings.floating_window.enabled:
             if not self.isVisible():

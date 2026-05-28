@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import threading
-import time
 from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Optional

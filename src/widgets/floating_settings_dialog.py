@@ -29,6 +29,11 @@ _COLOR_CHOICES = [
     ("自适应（根据下方背景）", "auto"),
 ]
 
+_THEME_CHOICES = [
+    ("文字（彩色圆角条）", "text"),
+    ("图片（assets/floating/）", "image"),
+]
+
 
 class FloatingSettingsDialog(QDialog):
     settings_changed = Signal(Settings)
@@ -45,6 +50,21 @@ class FloatingSettingsDialog(QDialog):
         self._enabled = QCheckBox("显示桌面悬浮窗")
         self._enabled.setChecked(fw.enabled)
         form.addRow("", self._enabled)
+
+        self._theme = QComboBox()
+        for label, val in _THEME_CHOICES:
+            self._theme.addItem(label, val)
+        idx = self._theme.findData(fw.theme)
+        if idx >= 0:
+            self._theme.setCurrentIndex(idx)
+        self._theme.currentIndexChanged.connect(self._on_theme_changed)
+        form.addRow("主题", self._theme)
+
+        self._image_size = QSpinBox()
+        self._image_size.setRange(48, 400)
+        self._image_size.setSuffix(" px")
+        self._image_size.setValue(fw.image_size)
+        form.addRow("图片主题尺寸", self._image_size)
 
         self._width = QSpinBox()
         self._width.setRange(40, 400)
@@ -94,15 +114,27 @@ class FloatingSettingsDialog(QDialog):
         buttons.accepted.connect(self._on_ok)
         buttons.rejected.connect(self.reject)
 
+        # 初始联动
+        self._on_theme_changed()
+
         root = QVBoxLayout(self)
         root.addLayout(form)
         root.addWidget(hint)
         root.addStretch(1)
         root.addWidget(buttons)
 
+    def _on_theme_changed(self) -> None:
+        is_text = self._theme.currentData() == "text"
+        # 文字主题的宽/高、字体颜色仅在文字模式下有意义
+        for w in (self._width, self._height, self._color):
+            w.setEnabled(is_text)
+        self._image_size.setEnabled(not is_text)
+
     def _on_ok(self) -> None:
         fw = self._settings.floating_window
         fw.enabled = self._enabled.isChecked()
+        fw.theme = self._theme.currentData() or "text"
+        fw.image_size = self._image_size.value()
         fw.width = self._width.value()
         fw.height = self._height.value()
         fw.opacity = self._opacity.value() / 100.0

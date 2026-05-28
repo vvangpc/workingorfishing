@@ -166,6 +166,9 @@ class MainWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+        # 主窗口隐藏时概览不再刷新（性能优化），show 时补齐一次
+        self.overview.refresh_bars()
+        self.overview.refresh_pending_count()
 
     def jump_to_overview(self) -> None:
         self._tabs.setCurrentIndex(0)

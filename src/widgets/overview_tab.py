@@ -260,7 +260,8 @@ class OverviewTab(QWidget):
     # --- 待确定 ---
 
     def refresh_pending_count(self) -> None:
-        n = len(self._storage.pending_unknown(limit=500))
+        # 用快速的 COUNT(*) 而非分组聚合，热路径少做 5000 行扫描
+        n = self._storage.unknown_count()
         self._btn_pending.setText(f"待确定 ({n})")
         if n > 0:
             self._btn_pending.setStyleSheet(

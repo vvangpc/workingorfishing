@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from typing import Optional
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket

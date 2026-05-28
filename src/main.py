@@ -77,17 +77,21 @@ def main() -> int:
     def on_state(state: str) -> None:
         tray.update_state(state)
         floating.update_state(state)
-        main_win.overview.update_status(state)
+        if main_win.isVisible():
+            main_win.overview.update_status(state)
 
     def on_unknown(sample: dict) -> None:
         ai.enqueue(sample)
-        main_win.overview.update_current_sample(
-            sample.get("process"), sample.get("title"), sample.get("url")
-        )
-        main_win.overview.refresh_pending_count()
+        if main_win.isVisible():
+            main_win.overview.update_current_sample(
+                sample.get("process"), sample.get("title"), sample.get("url")
+            )
+            main_win.overview.refresh_pending_count()
 
     def on_inserted() -> None:
-        main_win.overview.on_record_inserted()
+        # 主窗口隐藏时不刷概览 UI（节省 SQLite 查询 + Qt 重绘开销）
+        if main_win.isVisible():
+            main_win.overview.on_record_inserted()
         floating.on_record_inserted()
 
     collector.state_changed.connect(on_state)
@@ -283,7 +287,6 @@ def main() -> int:
         c = _make_webdav()
         if c is None:
             return
-        was_paused = settings.paused
         collector.stop()
         ai.stop()
         storage.close()

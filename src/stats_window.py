@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 from PySide6.QtCharts import (
     QBarCategoryAxis,
@@ -14,7 +13,7 @@ from PySide6.QtCharts import (
     QValueAxis,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QFont, QPainter
+from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
     QDateEdit,
     QHBoxLayout,

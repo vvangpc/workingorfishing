@@ -47,9 +47,11 @@ class FloatingSettings:
     y: int = 100
     opacity: float = 0.85
     click_through: bool = False
-    width: int = 80              # 状态条宽
-    height: int = 40             # 状态条高
+    width: int = 80              # 文字主题状态条宽
+    height: int = 40             # 文字主题状态条高
     font_color: str = "white"    # white / black / auto（自适应桌面背景）
+    theme: str = "text"          # text / image
+    image_size: int = 96         # 图片主题尺寸（正方形）
 
 
 @dataclass
@@ -108,6 +110,8 @@ class Settings:
             width=int(fw_data.get("width", 80)),
             height=int(fw_data.get("height", 40)),
             font_color=str(fw_data.get("font_color") or "white"),
+            theme=str(fw_data.get("theme") or "text"),
+            image_size=int(fw_data.get("image_size", 96)),
         )
 
         ai_data = data.get("ai") or {}
