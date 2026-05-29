@@ -122,11 +122,15 @@ class SettingsTab(QWidget):
         ui_layout.setContentsMargins(10, 8, 10, 8)
         self._autostart = QCheckBox("开机自动启动")
         self._autostart.setChecked(get_autostart())
+        btn_auto_pause = QPushButton("自动暂停设置…")
+        btn_auto_pause.setToolTip("到点自动暂停、过点自动恢复（如午餐时段），避免误记录")
+        btn_auto_pause.clicked.connect(self._open_auto_pause_dialog)
         btn_floating = QPushButton("悬浮窗设置…")
         btn_floating.setToolTip("启用 / 大小 / 透明度 / 字体颜色 / 鼠标穿透")
         btn_floating.clicked.connect(self._open_floating_dialog)
         ui_layout.addWidget(self._autostart)
         ui_layout.addStretch(1)
+        ui_layout.addWidget(btn_auto_pause)
         ui_layout.addWidget(btn_floating)
         layout.addWidget(ui_box)
 
@@ -240,6 +244,12 @@ class SettingsTab(QWidget):
 
     def _open_floating_dialog(self) -> None:
         dlg = FloatingSettingsDialog(self._settings, self)
+        dlg.settings_changed.connect(self.settings_changed)
+        dlg.exec()
+
+    def _open_auto_pause_dialog(self) -> None:
+        from .auto_pause_dialog import AutoPauseDialog
+        dlg = AutoPauseDialog(self._settings, self)
         dlg.settings_changed.connect(self.settings_changed)
         dlg.exec()
 

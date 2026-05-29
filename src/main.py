@@ -176,6 +176,7 @@ def main() -> int:
             ai.start()
         else:
             ai.stop()
+        collector.configure_schedules(s.auto_pause)
 
     main_win.settings_changed.connect(on_settings_changed)
 
@@ -389,6 +390,8 @@ def main() -> int:
         tray.update_paused(True)
     else:
         collector.start()
+    # 启动即评估自动暂停日程（如启动时正处于配置时段则立即暂停）
+    collector.configure_schedules(settings.auto_pause)
 
     tray.show_message("WorkingorFishing", "已启动，正在监控前台窗口")
 

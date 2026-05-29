@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 import psutil
@@ -11,9 +12,22 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from . import browser_url, idle
 from .classifier import Classifier
+from .settings import AutoPauseSettings
 from .storage import Storage
 
 logger = logging.getLogger(__name__)
+
+def _parse_hhmm(value: str) -> Optional[int]:
+    """\"HH:MM\" → 当天分钟数；解析失败返回 None。"""
+    try:
+        h, m = str(value).split(":")
+        h, m = int(h), int(m)
+    except (ValueError, AttributeError):
+        return None
+    if 0 <= h <= 23 and 0 <= m <= 59:
+        return h * 60 + m
+    return None
+
 
 _BROWSER_PROCS = {
     "chrome.exe",
@@ -41,7 +55,14 @@ class Collector(QObject):
         self._timer.timeout.connect(self._tick)
         self._interval_s = 10
         self._idle_threshold_s = 300
-        self._paused = False
+        # 暂停分两层：手动（托盘/按钮）+ 日程（自动暂停时段），有效暂停 = 二者之一为真
+        self._manual_paused = False
+        self._schedule_paused = False
+        # 日程检查定时器：每 30s 判断当前时间是否落入暂停时段
+        self._sched_timer = QTimer(self)
+        self._sched_timer.timeout.connect(self._check_schedule)
+        self._auto_pause_enabled = False
+        self._pause_ranges: list[tuple[int, int]] = []  # 已解析为分钟数的区间
         self._last_state: Optional[str] = None
         # 去重：避免同一 (process, title-or-url-key) 反复发未确认事件
         self._unknown_seen: set[tuple[str, str]] = set()
@@ -55,20 +76,61 @@ class Collector(QObject):
             self._timer.start(self._interval_s * 1000)
 
     def start(self) -> None:
-        if not self._paused:
+        if not self._is_paused():
             self._timer.start(self._interval_s * 1000)
             QTimer.singleShot(0, self._tick)
 
     def stop(self) -> None:
         self._timer.stop()
+        self._sched_timer.stop()
+
+    def _is_paused(self) -> bool:
+        return self._manual_paused or self._schedule_paused
 
     def set_paused(self, paused: bool) -> None:
-        self._paused = paused
-        if paused:
+        self._manual_paused = paused
+        self._refresh_active()
+
+    def configure_schedules(self, auto_pause: AutoPauseSettings) -> None:
+        """根据自动暂停设置（重新）配置日程定时器。"""
+        self._auto_pause_enabled = bool(auto_pause.enabled)
+        self._pause_ranges = []
+        for r in auto_pause.ranges:
+            if not getattr(r, "enabled", True):
+                continue
+            start = _parse_hhmm(r.start)
+            end = _parse_hhmm(r.end)
+            if start is None or end is None or start == end:
+                continue
+            self._pause_ranges.append((start, end))
+
+        if self._auto_pause_enabled and self._pause_ranges:
+            self._sched_timer.start(30_000)
+            self._check_schedule()  # 立即评估一次
+        else:
+            self._sched_timer.stop()
+            self._schedule_paused = False
+            self._refresh_active()
+
+    def _check_schedule(self) -> None:
+        now = datetime.now()
+        now_min = now.hour * 60 + now.minute
+        in_range = any(
+            (start <= now_min < end) if start < end
+            else (now_min >= start or now_min < end)  # 跨午夜
+            for start, end in self._pause_ranges
+        )
+        if in_range != self._schedule_paused:
+            self._schedule_paused = in_range
+            self._refresh_active()
+
+    def _refresh_active(self) -> None:
+        if self._is_paused():
             self._timer.stop()
             self._emit_state("paused")
-        else:
-            self.start()
+        elif not self._timer.isActive():
+            self._timer.start(self._interval_s * 1000)
+            QTimer.singleShot(0, self._tick)
 
     def clear_unknown_seen(self) -> None:
         """规则有变更或用户确认了一些 unknown 后，清掉去重表让 collector 重新发现。"""
@@ -81,7 +143,7 @@ class Collector(QObject):
     # --- 采样 ---
 
     def _tick(self) -> None:
-        if self._paused:
+        if self._is_paused():
             return
         try:
             self._sample_once()

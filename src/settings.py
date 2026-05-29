@@ -67,6 +67,19 @@ class AISettings:
 
 
 @dataclass
+class PauseRange:
+    start: str = "12:00"   # "HH:MM"
+    end: str = "13:00"     # "HH:MM"，end < start 视为跨午夜
+    enabled: bool = True
+
+
+@dataclass
+class AutoPauseSettings:
+    enabled: bool = False
+    ranges: list = field(default_factory=list)  # list[PauseRange]
+
+
+@dataclass
 class WebDAVSettings:
     url: str = ""
     username: str = ""
@@ -81,6 +94,7 @@ class Settings:
     idle_threshold_seconds: int = 300
     autostart: bool = False
     paused: bool = False
+    auto_pause: AutoPauseSettings = field(default_factory=AutoPauseSettings)
     floating_window: FloatingSettings = field(default_factory=FloatingSettings)
     ai: AISettings = field(default_factory=AISettings)
     webdav: WebDAVSettings = field(default_factory=WebDAVSettings)
@@ -126,6 +140,21 @@ class Settings:
             prompt_template=str(ai_data.get("prompt_template") or DEFAULT_AI_PROMPT),
         )
 
+        ap_data = data.get("auto_pause") or {}
+        ap_ranges = []
+        for r in (ap_data.get("ranges") or []):
+            if not isinstance(r, dict):
+                continue
+            ap_ranges.append(PauseRange(
+                start=str(r.get("start", "12:00")),
+                end=str(r.get("end", "13:00")),
+                enabled=bool(r.get("enabled", True)),
+            ))
+        auto_pause = AutoPauseSettings(
+            enabled=bool(ap_data.get("enabled", False)),
+            ranges=ap_ranges,
+        )
+
         geom = data.get("window_geometry") or {}
         if not isinstance(geom, dict):
             geom = {}
@@ -144,6 +173,7 @@ class Settings:
             idle_threshold_seconds=int(data.get("idle_threshold_seconds", 300)),
             autostart=bool(data.get("autostart", False)),
             paused=bool(data.get("paused", False)),
+            auto_pause=auto_pause,
             floating_window=fw,
             ai=ai,
             webdav=webdav,
@@ -159,6 +189,8 @@ class Settings:
         self.idle_threshold_seconds = fresh.idle_threshold_seconds
         self.autostart = fresh.autostart
         self.paused = fresh.paused
+        self.auto_pause.enabled = fresh.auto_pause.enabled
+        self.auto_pause.ranges = list(fresh.auto_pause.ranges)
         # 子 dataclass 原地 mutate
         self.floating_window.__dict__.update(fresh.floating_window.__dict__)
         self.ai.__dict__.update(fresh.ai.__dict__)
