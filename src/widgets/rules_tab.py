@@ -147,9 +147,9 @@ class RulesTab(QWidget):
         self._table.setHorizontalHeaderLabels(
             ["启用", "优先级", "类别", "进程", "标题正则", "URL 正则", "来源", "备注", "操作"]
         )
+        # 所有列均可拖拽调整宽度（含「标题正则」列，原先 Stretch 无法手动调整）
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self._table.horizontalHeader().setStretchLastSection(False)
-        self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
@@ -166,7 +166,7 @@ class RulesTab(QWidget):
             "}"
         )
 
-        for col, w in {0: 48, 1: 60, 2: 70, 3: 130, 5: 200, 6: 50, 7: 130, 8: 110}.items():
+        for col, w in {0: 48, 1: 60, 2: 70, 3: 130, 4: 220, 5: 200, 6: 50, 7: 130, 8: 110}.items():
             self._table.setColumnWidth(col, w)
 
         # --- 测试匹配区 ---

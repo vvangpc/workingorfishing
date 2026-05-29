@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 from datetime import datetime
+from time import monotonic
 from typing import Optional
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
@@ -247,8 +248,10 @@ class FloatingWindow(QWidget):
         color = STATE_COLORS.get(state, STATE_COLORS["neutral"])
         text = STATE_LABELS.get(state, state)
         r, g, b = color.red(), color.green(), color.blue()
+        # QLabel 的 text 与 pixmap 互斥：必须先清残留图片，再设文字（setText 须最后调用，
+        # 否则 setPixmap(空) 会把刚设好的文字一并清掉 → 文字主题文字消失）
+        self._state_label.setPixmap(QPixmap())
         self._state_label.setText(text)
-        self._state_label.setPixmap(QPixmap())  # 清掉图片
         self._state_label.setStyleSheet(
             "QLabel {"
             f" background-color: rgba({r}, {g}, {b}, 220);"
@@ -285,7 +288,6 @@ class FloatingWindow(QWidget):
     # --- 心跳 ---
 
     def _tick(self) -> None:
-        from time import monotonic
         now = datetime.now()
         if monotonic() - self._last_query >= 30 or not self._today_totals:
             try:

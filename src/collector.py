@@ -96,6 +96,7 @@ class Collector(QObject):
                 url=None,
                 category="idle",
                 is_idle=True,
+                interval=self._interval_s,
             )
             self._emit_state("idle")
             self.record_inserted.emit()
@@ -133,6 +134,7 @@ class Collector(QObject):
             category=category,
             is_idle=False,
             rule_id=rule_id,
+            interval=self._interval_s,
         )
         self._emit_state(category)
         self.record_inserted.emit()

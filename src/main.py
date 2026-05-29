@@ -7,6 +7,8 @@ import sys
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
+import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from .data_io import (
     WebDAVClient,
     export_to_zip,
     import_from_zip,
+    webdav_download_to_dir,
     webdav_pull,
     webdav_push,
 )
@@ -57,7 +60,7 @@ def main() -> int:
         return 1
 
     settings = Settings.load()
-    storage = Storage()
+    storage = Storage(default_interval=settings.sample_interval_seconds)
     classifier = Classifier()
     ai = AIClassifier(settings.ai)
     if settings.ai.enabled:
@@ -162,6 +165,7 @@ def main() -> int:
 
     def on_settings_changed(s: Settings) -> None:
         collector.configure(s.sample_interval_seconds, s.idle_threshold_seconds)
+        storage.set_default_interval(s.sample_interval_seconds)
         floating.apply_settings(s)
         floating.set_sample_interval(s.sample_interval_seconds)
         tray.update_click_through(s.floating_window.click_through)
@@ -263,30 +267,82 @@ def main() -> int:
         else:
             QMessageBox.warning(main_win, "WebDAV 测试失败", msg)
 
-    def on_webdav_push() -> None:
-        c = _make_webdav()
-        if c is None:
-            return
-        # 推送前先 flush 一下 WAL，确保 activity.db 文件包含最新写入
+    def _wal_checkpoint() -> None:
+        # flush WAL，确保 activity.db 文件包含最新写入
         try:
             storage._conn.execute("PRAGMA wal_checkpoint(FULL)")
         except Exception:
             pass
+
+    def _merge_remote_into_local(c: WebDAVClient) -> tuple[bool, list[str]]:
+        """把云端 activity.db + rules.yaml 合并进本地（不删除本地数据）。"""
+        messages: list[str] = []
+        tmp = Path(tempfile.mkdtemp(prefix="wof_merge_"))
+        try:
+            got, dl_msgs = webdav_download_to_dir(c, tmp, ("activity.db", "rules.yaml"))
+            messages.extend(dl_msgs)
+            if "activity.db" in got:
+                n = storage.merge_db(got["activity.db"])
+                messages.append(f"activity.db: 合并新增 {n} 条记录")
+            if "rules.yaml" in got:
+                n = classifier.merge_rules_file(got["rules.yaml"])
+                messages.append(f"rules.yaml: 合并新增 {n} 条规则")
+            return True, messages
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def on_webdav_push(mode: str = "overwrite") -> None:
+        c = _make_webdav()
+        if c is None:
+            return
+        if mode == "merge":
+            collector.stop()
+            try:
+                _wal_checkpoint()
+                _merge_remote_into_local(c)  # 本地变为并集
+                classifier.reload(force=True)
+            finally:
+                if not settings.paused:
+                    collector.start()
+        _wal_checkpoint()
         ok, messages = webdav_push(c, db_file(), settings_file(), rules_file())
         if ok:
             settings.webdav.last_push = time.time()
             settings.save()
             main_win.settings_tab.refresh_sync_status()
+        if mode == "merge":
+            refresh_data_ui()
         text = "\n".join(messages)
         if ok:
             QMessageBox.information(main_win, "推送完成", text)
         else:
             QMessageBox.warning(main_win, "部分文件推送失败", text)
 
-    def on_webdav_pull() -> None:
+    def on_webdav_pull(mode: str = "overwrite") -> None:
         c = _make_webdav()
         if c is None:
             return
+
+        if mode == "merge":
+            # 合并：保留本地数据，把云端并入。不关闭 DB（merge 用现有连接）。
+            collector.stop()
+            ok = True
+            try:
+                _wal_checkpoint()
+                ok, messages = _merge_remote_into_local(c)
+                classifier.reload(force=True)
+            finally:
+                if not settings.paused:
+                    collector.start()
+            if ok:
+                settings.webdav.last_pull = time.time()
+                settings.save()
+            refresh_data_ui()
+            text = "\n".join(messages)
+            QMessageBox.information(main_win, "合并拉取完成", text)
+            return
+
+        # 覆盖：用云端文件替换本地
         collector.stop()
         ai.stop()
         storage.close()
@@ -295,6 +351,7 @@ def main() -> int:
 
         storage.reopen()
         settings.apply_from_file()
+        storage.set_default_interval(settings.sample_interval_seconds)
         classifier.reload(force=True)
         ai.configure(settings.ai)
         if settings.ai.enabled:

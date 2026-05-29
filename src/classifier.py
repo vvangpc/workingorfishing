@@ -303,6 +303,38 @@ class Classifier:
         if save:
             self.save()
 
+    def merge_rules_file(self, other_path: Path) -> int:
+        """把另一个 rules.yaml 里本地没有的规则（按 id 去重）并入当前规则集。
+        返回新增条数。WebDAV 合并同步用。"""
+        p = Path(other_path)
+        if not p.exists():
+            return 0
+        try:
+            data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        except Exception:
+            logger.exception("merge_rules_file: failed to read %s", p)
+            return 0
+
+        incoming, _ = _convert_legacy(data)
+        if not incoming:
+            for item in data.get("rules") or []:
+                if isinstance(item, dict):
+                    r = self._build_from_dict(item)
+                    if r is not None:
+                        incoming.append(r)
+
+        existing_ids = {r.id for r in self._rules}
+        added = [r for r in incoming if r.id not in existing_ids]
+        if not added:
+            return 0
+        for r in added:
+            r.compile()
+        new = list(self._rules) + added
+        new.sort(key=lambda r: r.priority)
+        self._rules = new
+        self.save()
+        return len(added)
+
     def replace_all(self, rules: list[Rule], save: bool = True) -> None:
         for r in rules:
             r.compile()

@@ -65,8 +65,8 @@ class SettingsTab(QWidget):
     request_export = Signal(str)        # 目标 zip 路径
     request_import = Signal(str)
     request_clear = Signal()
-    request_webdav_push = Signal()
-    request_webdav_pull = Signal()
+    request_webdav_push = Signal(str)   # "overwrite" / "merge"
+    request_webdav_pull = Signal(str)   # "overwrite" / "merge"
     request_webdav_test = Signal()
 
     def __init__(self, settings: Settings, parent: Optional[QWidget] = None):
@@ -291,21 +291,47 @@ class SettingsTab(QWidget):
         self._settings.save()
         self.request_webdav_test.emit()
 
+    def _ask_sync_mode(
+        self, title: str, overwrite_desc: str, merge_desc: str
+    ) -> Optional[str]:
+        """弹窗让用户选择 覆盖 / 合并 / 取消。返回 'overwrite' / 'merge' / None。"""
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setIcon(QMessageBox.Question)
+        box.setText(f"选择{title}方式：")
+        box.setInformativeText(f"覆盖：{overwrite_desc}\n\n合并：{merge_desc}")
+        btn_ow = box.addButton("覆盖", QMessageBox.AcceptRole)
+        btn_mg = box.addButton("合并", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_ow:
+            return "overwrite"
+        if clicked is btn_mg:
+            return "merge"
+        return None
+
     def _on_webdav_push(self) -> None:
         self._flush_webdav_to_settings()
         self._settings.save()
-        self.request_webdav_push.emit()
+        mode = self._ask_sync_mode(
+            "推送到云端",
+            "用本地数据覆盖云端（云端原有未同步数据会被替换）。",
+            "先把云端数据合并进本地，再上传汇总结果（双向不丢数据）。",
+        )
+        if mode:
+            self.request_webdav_push.emit(mode)
 
     def _on_webdav_pull(self) -> None:
         self._flush_webdav_to_settings()
         self._settings.save()
-        if QMessageBox.question(
-            self, "WebDAV 拉取",
-            "从云端拉取会覆盖本地数据，继续？",
-            QMessageBox.Yes | QMessageBox.No,
-        ) != QMessageBox.Yes:
-            return
-        self.request_webdav_pull.emit()
+        mode = self._ask_sync_mode(
+            "从云端拉取",
+            "用云端数据覆盖本地（本地未同步数据会丢失）。",
+            "把云端数据合并到本地，保留本地已有记录和规则，不删除任何数据。",
+        )
+        if mode:
+            self.request_webdav_pull.emit(mode)
 
     # --- 保存 ---
 

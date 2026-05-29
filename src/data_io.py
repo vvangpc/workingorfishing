@@ -199,6 +199,23 @@ def webdav_push(
     return all_ok, messages
 
 
+def webdav_download_to_dir(
+    client: WebDAVClient, dst_dir: Path, names: tuple[str, ...] = SYNC_FILES
+) -> tuple[dict[str, Path], list[str]]:
+    """把远端文件下到临时目录，返回 ({name: 本地路径}, 消息列表)。
+    远端不存在 (404) 视为正常跳过。合并同步用。"""
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    got: dict[str, Path] = {}
+    messages: list[str] = []
+    for name in names:
+        dst = dst_dir / name
+        ok, msg = client.download(name, dst)
+        messages.append(msg)
+        if ok:
+            got[name] = dst
+    return got, messages
+
+
 def webdav_pull(
     client: WebDAVClient,
     db_path: Path,

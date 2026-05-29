@@ -203,7 +203,10 @@ class _StatsView(QWidget):
         self._tree = QTreeWidget()
         self._tree.setColumnCount(3)
         self._tree.setHeaderLabels(["分类 / 进程 / 标题（或 URL）", "时长", "占比"])
-        self._tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        # 所有列均可拖拽调整宽度（原先第 0 列 Stretch 无法手动调整）
+        self._tree.header().setSectionResizeMode(QHeaderView.Interactive)
+        self._tree.header().setStretchLastSection(False)
+        self._tree.setColumnWidth(0, 360)
         self._tree.setColumnWidth(1, 110)
         self._tree.setColumnWidth(2, 70)
         self._tree.setAlternatingRowColors(True)

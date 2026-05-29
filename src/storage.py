@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS activity_log (
     url TEXT,
     category TEXT NOT NULL,
     is_idle INTEGER NOT NULL DEFAULT 0,
-    rule_id TEXT
+    rule_id TEXT,
+    interval INTEGER
 );
 """
 
@@ -47,8 +48,10 @@ def _existing_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 class Storage:
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Optional[Path] = None, default_interval: int = 10) -> None:
         self._path = Path(path) if path else db_file()
+        # 用于历史行（迁移前未记录 interval）的回填值，也是 SUM 时的兜底
+        self._default_interval = max(1, int(default_interval))
         self._lock = threading.Lock()
         self._connect()
 
@@ -67,6 +70,20 @@ class Storage:
         if "rule_id" not in cols:
             self._conn.execute("ALTER TABLE activity_log ADD COLUMN rule_id TEXT")
             logger.info("storage: added rule_id column")
+        if "interval" not in cols:
+            # 旧库每行没有采样间隔。回填当前配置的间隔——等于升级时刻旧逻辑
+            # (COUNT * 当前间隔) 的取值，使既有统计在升级后保持不变；此后新行记录真实间隔。
+            self._conn.execute("ALTER TABLE activity_log ADD COLUMN interval INTEGER")
+            self._conn.execute(
+                "UPDATE activity_log SET interval = ? WHERE interval IS NULL",
+                (self._default_interval,),
+            )
+            logger.info(
+                "storage: added interval column, backfilled with %d", self._default_interval
+            )
+
+    def set_default_interval(self, seconds: int) -> None:
+        self._default_interval = max(1, int(seconds))
 
     def close(self) -> None:
         with self._lock:
@@ -88,6 +105,51 @@ class Storage:
             n = cur.rowcount or 0
         return n
 
+    def merge_db(self, other_path: Path) -> int:
+        """把另一个 activity.db 里本地没有的活动行并入本库。返回新增行数。
+
+        去重以自然键 (ts, 进程, 标题, url, category, is_idle) 判断，避免重复导入。
+        兼容旧 schema（缺 interval / rule_id 列）的来源库。WebDAV 合并同步用。
+        """
+        other_path = Path(other_path)
+        if not other_path.exists():
+            return 0
+        with self._lock:
+            self._conn.execute("ATTACH DATABASE ? AS merge_src", (str(other_path),))
+            try:
+                cols = {
+                    row[1]
+                    for row in self._conn.execute(
+                        "PRAGMA merge_src.table_info(activity_log)"
+                    )
+                }
+                if not cols:
+                    return 0
+                interval_sel = "o.interval" if "interval" in cols else str(self._default_interval)
+                rule_sel = "o.rule_id" if "rule_id" in cols else "NULL"
+                cur = self._conn.execute(
+                    f"""
+                    INSERT INTO activity_log
+                        (ts, process_name, window_title, url, category, is_idle, rule_id, interval)
+                    SELECT o.ts, o.process_name, o.window_title, o.url, o.category,
+                           o.is_idle, {rule_sel}, {interval_sel}
+                    FROM merge_src.activity_log o
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM activity_log a
+                        WHERE a.ts = o.ts
+                          AND IFNULL(a.process_name, '') = IFNULL(o.process_name, '')
+                          AND IFNULL(a.window_title, '') = IFNULL(o.window_title, '')
+                          AND IFNULL(a.url, '') = IFNULL(o.url, '')
+                          AND a.category = o.category
+                          AND a.is_idle = o.is_idle
+                    )
+                    """
+                )
+                n = cur.rowcount or 0
+            finally:
+                self._conn.execute("DETACH DATABASE merge_src")
+        return n
+
     # --- 写入 ---
 
     def insert(
@@ -100,13 +162,16 @@ class Storage:
         is_idle: bool,
         rule_id: Optional[str] = None,
         ts: Optional[int] = None,
+        interval: Optional[int] = None,
     ) -> None:
         ts = ts if ts is not None else int(time.time())
+        # 记录这条样本代表的时长（= 采样间隔）。聚合时按行求和，改间隔不影响历史。
+        iv = self._default_interval if interval is None else max(1, int(interval))
         with self._lock:
             self._conn.execute(
                 "INSERT INTO activity_log"
-                " (ts, process_name, window_title, url, category, is_idle, rule_id)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " (ts, process_name, window_title, url, category, is_idle, rule_id, interval)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     ts,
                     process_name,
@@ -115,6 +180,7 @@ class Storage:
                     category,
                     1 if is_idle else 0,
                     rule_id,
+                    iv,
                 ),
             )
 
@@ -125,12 +191,12 @@ class Storage:
     ) -> dict[str, int]:
         with self._lock:
             cur = self._conn.execute(
-                "SELECT category, COUNT(*) FROM activity_log"
+                "SELECT category, SUM(COALESCE(interval, ?)) FROM activity_log"
                 " WHERE ts >= ? AND ts < ? GROUP BY category",
-                (start_ts, end_ts),
+                (sample_interval, start_ts, end_ts),
             )
             rows = cur.fetchall()
-        return {cat: count * sample_interval for cat, count in rows}
+        return {cat: int(total) for cat, total in rows}
 
     def buckets(
         self,
@@ -141,17 +207,17 @@ class Storage:
     ) -> list[tuple[int, dict[str, int]]]:
         with self._lock:
             cur = self._conn.execute(
-                "SELECT ((ts - ?) / ?) AS bucket, category, COUNT(*)"
+                "SELECT ((ts - ?) / ?) AS bucket, category, SUM(COALESCE(interval, ?))"
                 " FROM activity_log"
                 " WHERE ts >= ? AND ts < ?"
                 " GROUP BY bucket, category"
                 " ORDER BY bucket",
-                (start_ts, bucket_seconds, start_ts, end_ts),
+                (start_ts, bucket_seconds, sample_interval, start_ts, end_ts),
             )
             rows = cur.fetchall()
         out: dict[int, dict[str, int]] = {}
-        for bucket, cat, count in rows:
-            out.setdefault(bucket, {})[cat] = count * sample_interval
+        for bucket, cat, total in rows:
+            out.setdefault(bucket, {})[cat] = int(total)
         return [
             (start_ts + b * bucket_seconds, cats) for b, cats in sorted(out.items())
         ]
@@ -165,19 +231,19 @@ class Storage:
         limit: int = 10,
     ) -> list[tuple[str, int]]:
         sql = (
-            "SELECT COALESCE(process_name, '(unknown)'), COUNT(*) FROM activity_log"
+            "SELECT COALESCE(process_name, '(unknown)'), SUM(COALESCE(interval, ?)) FROM activity_log"
             " WHERE ts >= ? AND ts < ?"
         )
-        params: list = [start_ts, end_ts]
+        params: list = [sample_interval, start_ts, end_ts]
         if category:
             sql += " AND category = ?"
             params.append(category)
-        sql += " GROUP BY process_name ORDER BY COUNT(*) DESC LIMIT ?"
+        sql += " GROUP BY process_name ORDER BY 2 DESC LIMIT ?"
         params.append(limit)
         with self._lock:
             cur = self._conn.execute(sql, params)
             rows = cur.fetchall()
-        return [(name, count * sample_interval) for name, count in rows]
+        return [(name, int(total)) for name, total in rows]
 
     def top_urls(
         self,
@@ -188,19 +254,19 @@ class Storage:
         limit: int = 10,
     ) -> list[tuple[str, int]]:
         sql = (
-            "SELECT url, COUNT(*) FROM activity_log"
+            "SELECT url, SUM(COALESCE(interval, ?)) FROM activity_log"
             " WHERE ts >= ? AND ts < ? AND url IS NOT NULL AND url != ''"
         )
-        params: list = [start_ts, end_ts]
+        params: list = [sample_interval, start_ts, end_ts]
         if category:
             sql += " AND category = ?"
             params.append(category)
-        sql += " GROUP BY url ORDER BY COUNT(*) DESC LIMIT ?"
+        sql += " GROUP BY url ORDER BY 2 DESC LIMIT ?"
         params.append(limit)
         with self._lock:
             cur = self._conn.execute(sql, params)
             rows = cur.fetchall()
-        return [(url, count * sample_interval) for url, count in rows]
+        return [(url, int(total)) for url, total in rows]
 
     def breakdown_by_process(
         self,
@@ -213,15 +279,15 @@ class Storage:
         """按 (category, process_name) 分组，返回 [(process, seconds), ...] 降序。"""
         with self._lock:
             cur = self._conn.execute(
-                "SELECT process_name, COUNT(*) FROM activity_log"
+                "SELECT process_name, SUM(COALESCE(interval, ?)) FROM activity_log"
                 " WHERE ts >= ? AND ts < ? AND category = ? AND is_idle = 0"
                 " GROUP BY process_name"
-                " ORDER BY COUNT(*) DESC"
+                " ORDER BY 2 DESC"
                 " LIMIT ?",
-                (start_ts, end_ts, category, limit),
+                (sample_interval, start_ts, end_ts, category, limit),
             )
             rows = cur.fetchall()
-        return [(name, count * sample_interval) for name, count in rows]
+        return [(name, int(total)) for name, total in rows]
 
     def breakdown_by_window(
         self,
@@ -245,22 +311,22 @@ class Storage:
             bucket_expr = "COALESCE(window_title, '(空)')"
 
         sql = (
-            f"SELECT {bucket_expr} AS bucket, COUNT(*) FROM activity_log"
+            f"SELECT {bucket_expr} AS bucket, SUM(COALESCE(interval, ?)) FROM activity_log"
             " WHERE ts >= ? AND ts < ? AND category = ? AND is_idle = 0"
         )
-        params: list = [start_ts, end_ts, category]
+        params: list = [sample_interval, start_ts, end_ts, category]
         if process_name is None:
             sql += " AND process_name IS NULL"
         else:
             sql += " AND LOWER(process_name) = ?"
             params.append(process_name.lower())
-        sql += " GROUP BY bucket ORDER BY COUNT(*) DESC LIMIT ?"
+        sql += " GROUP BY bucket ORDER BY 2 DESC LIMIT ?"
         params.append(limit)
 
         with self._lock:
             cur = self._conn.execute(sql, params)
             rows = cur.fetchall()
-        return [(str(name) if name is not None else "(空)", count * sample_interval) for name, count in rows]
+        return [(str(name) if name is not None else "(空)", int(total)) for name, total in rows]
 
     def recent(self, limit: int = 20) -> list[sqlite3.Row]:
         with self._lock:

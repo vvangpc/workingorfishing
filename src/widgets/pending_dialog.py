@@ -137,10 +137,11 @@ class PendingDialog(QDialog):
         self._table.setHorizontalHeaderLabels(
             ["进程", "标题", "URL", "次数", "AI 建议", "操作"]
         )
+        # 所有列均可拖拽调整宽度（原先「标题」列 Stretch 无法手动调整）
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self._table.horizontalHeader().setStretchLastSection(False)
         for col, w in {0: 130, 1: 240, 2: 240, 3: 56, 4: 130, 5: 200}.items():
             self._table.setColumnWidth(col, w)
-        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
