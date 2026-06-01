@@ -62,6 +62,7 @@ class SettingsTab(QWidget):
     open_rules_requested = Signal()
     open_ai_requested = Signal()
     open_stats_requested = Signal()
+    open_commentary_requested = Signal()
     request_export = Signal(str)        # 目标 zip 路径
     request_import = Signal(str)
     request_clear = Signal()
@@ -85,6 +86,7 @@ class SettingsTab(QWidget):
         for label, signal in (
             ("规则管理", self.open_rules_requested),
             ("AI 判断", self.open_ai_requested),
+            ("AI 评语", self.open_commentary_requested),
             ("统计", self.open_stats_requested),
         ):
             btn = QPushButton(label)

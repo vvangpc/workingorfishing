@@ -177,6 +177,9 @@ def main() -> int:
         else:
             ai.stop()
         collector.configure_schedules(s.auto_pause)
+        # 保存点评风格后，若窗口可见则即时刷新（后台隐藏时不调用）
+        if main_win.isVisible():
+            main_win.overview.refresh_commentary()
 
     main_win.settings_changed.connect(on_settings_changed)
 

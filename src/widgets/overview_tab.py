@@ -6,6 +6,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -15,8 +16,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import commentary
 from ..ai_classifier import AIClassifier, AISuggestion
 from ..classifier import Classifier
+from ..settings import Settings
 from ..storage import Storage, day_range
 from ..widgets.pending_dialog import PendingDialog
 
@@ -161,6 +164,7 @@ class OverviewTab(QWidget):
         classifier: Classifier,
         ai_classifier: AIClassifier,
         sample_interval: int,
+        settings: Settings,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -168,8 +172,11 @@ class OverviewTab(QWidget):
         self._classifier = classifier
         self._ai = ai_classifier
         self._sample_interval = sample_interval
+        self._settings = settings
         self._suggestions: dict[tuple, AISuggestion] = {}
         self._pending_dialog: Optional[PendingDialog] = None
+        self._commentary_pending = False
+        self._last_totals: dict[str, int] = {}
 
         # --- 顶部一行：状态点 + 按钮 ---
         self._status_label = QLabel("● 等待…")
@@ -199,6 +206,35 @@ class OverviewTab(QWidget):
         # --- 横条形图 ---
         self._bars = _BarChart()
 
+        # --- 今日点评卡片 ---
+        self._commentary_box = QFrame()
+        self._commentary_box.setObjectName("commentaryBox")
+        self._commentary_box.setStyleSheet(
+            "QFrame#commentaryBox {"
+            " background-color: #f7f9fc;"
+            " border: 1px solid #e3e8ef;"
+            " border-radius: 10px;"
+            "}"
+        )
+        cbox = QVBoxLayout(self._commentary_box)
+        cbox.setContentsMargins(14, 10, 14, 12)
+        cbox.setSpacing(6)
+        cm_title = QLabel("💬 今日点评")
+        cm_title.setStyleSheet(
+            "font: bold 11px '微软雅黑'; color: #8a94a6;"
+            " border: none; background: transparent;"
+        )
+        self._commentary = QLabel("打开窗口后自动生成今日点评…")
+        self._commentary.setWordWrap(True)
+        self._commentary.setTextFormat(Qt.PlainText)
+        self._commentary.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self._commentary.setStyleSheet(
+            "font: 14px '微软雅黑'; color: #2c3e50;"
+            " border: none; background: transparent; padding: 0;"
+        )
+        cbox.addWidget(cm_title)
+        cbox.addWidget(self._commentary, 1)
+
         # --- 整体垂直布局 ---
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
@@ -213,9 +249,11 @@ class OverviewTab(QWidget):
         root.addWidget(sep)
         root.addSpacing(2)
         root.addWidget(self._bars)
-        root.addStretch(1)
+        root.addSpacing(4)
+        root.addWidget(self._commentary_box, 1)
 
         self._ai.suggestion_ready.connect(self._on_suggestion)
+        self._ai.commentary_ready.connect(self._on_commentary)
 
         self.refresh_bars()
         self.refresh_pending_count()
@@ -256,6 +294,41 @@ class OverviewTab(QWidget):
         start, end = day_range(datetime.now())
         totals = self._storage.aggregate_range(start, end, self._sample_interval)
         self._bars.update_totals(totals)
+
+    # --- 今日点评 ---
+
+    def refresh_commentary(self) -> None:
+        """仅在主窗口打开时调用：依据今日占比生成一句点评。后台隐藏时不触发。"""
+        start, end = day_range(datetime.now())
+        totals = self._storage.aggregate_range(start, end, self._sample_interval)
+        self._last_totals = totals
+        active = (
+            totals.get("work", 0)
+            + totals.get("fishing", 0)
+            + totals.get("neutral", 0)
+        )
+        if active <= 0:
+            self._commentary.setText("今天还没真正开工，先动起来吧～")
+            return
+        if not self._ai.is_ready:
+            self._commentary.setText(
+                "🔒 启用 AI 判断后即可生成今日点评（设置 → 工具 → AI 评语）"
+            )
+            return
+        if self._commentary_pending:
+            return
+        self._commentary_pending = True
+        self._commentary.setText("正在生成今日点评…")
+        prompt = commentary.build_prompt(self._settings.commentary, totals)
+        self._ai.generate_commentary(prompt)
+
+    def _on_commentary(self, text: str) -> None:
+        self._commentary_pending = False
+        text = (text or "").strip()
+        if text:
+            self._commentary.setText(text)
+        else:
+            self._commentary.setText("点评生成失败，请检查 AI 配置后重试")
 
     # --- 待确定 ---
 

@@ -51,6 +51,8 @@ class AIClassifier(QObject):
     suggestion_ready = Signal(object)   # AISuggestion
     error_occurred = Signal(str)
     stats_changed = Signal(dict)        # {calls, errors, last_error_ts}
+    commentary_ready = Signal(str)          # 今日点评生成完成（概览框用）
+    commentary_preview_ready = Signal(str)  # 点评弹窗预览完成
 
     def __init__(self, settings: AISettings, parent=None):
         super().__init__(parent)
@@ -233,15 +235,11 @@ class AIClassifier(QObject):
 
     # --- LLM 调用与解析 ---
 
-    def _call_llm(self, sample: dict, timeout: float) -> str:
+    def _chat(self, prompt: str, timeout: float) -> str:
+        """对 OpenAI 兼容端点发一次 chat 请求，返回 message content。"""
         s = self._settings
         if not s.api_key:
             raise RuntimeError("AI 未配置 api_key")
-        prompt = s.prompt_template.format(
-            process=sample.get("process") or "(无)",
-            title=sample.get("title") or "(无)",
-            url=sample.get("url") or "(无)",
-        )
         url = s.base_url.rstrip("/") + "/chat/completions"
         body = {
             "model": s.model,
@@ -260,6 +258,39 @@ class AIClassifier(QObject):
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
             raise RuntimeError(f"unexpected response shape: {data!r}") from e
+
+    def _call_llm(self, sample: dict, timeout: float) -> str:
+        prompt = self._settings.prompt_template.format(
+            process=sample.get("process") or "(无)",
+            title=sample.get("title") or "(无)",
+            url=sample.get("url") or "(无)",
+        )
+        return self._chat(prompt, timeout)
+
+    # --- 今日点评（一次性调用） ---
+
+    def _run_commentary(self, prompt: str, signal) -> None:
+        if not self.is_ready:
+            signal.emit("")
+            return
+
+        def _gen():
+            try:
+                text = _strip_md_fence(self._chat(prompt, 20.0)).strip().strip('"').strip()
+                signal.emit(text)
+            except Exception as e:
+                logger.warning("commentary generation failed: %s", e)
+                signal.emit("")
+
+        threading.Thread(target=_gen, daemon=True, name="Commentary").start()
+
+    def generate_commentary(self, prompt: str) -> None:
+        """生成今日点评，完成后 emit commentary_ready(text)；失败/未就绪 emit \"\"。"""
+        self._run_commentary(prompt, self.commentary_ready)
+
+    def preview_commentary(self, prompt: str) -> None:
+        """点评弹窗预览，完成后 emit commentary_preview_ready(text)。"""
+        self._run_commentary(prompt, self.commentary_preview_ready)
 
     def _parse(self, sample: dict, content: str) -> Optional[AISuggestion]:
         cleaned = _strip_md_fence(content)

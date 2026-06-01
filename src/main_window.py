@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         self.overview = OverviewTab(
             storage, classifier, ai_classifier,
             settings.sample_interval_seconds,
+            settings,
         )
         self.settings_tab = SettingsTab(settings)
 
@@ -107,6 +108,7 @@ class MainWindow(QMainWindow):
         self.settings_tab.open_rules_requested.connect(self.show_rules_dialog)
         self.settings_tab.open_ai_requested.connect(self.show_ai_dialog)
         self.settings_tab.open_stats_requested.connect(self.show_stats_dialog)
+        self.settings_tab.open_commentary_requested.connect(self.show_commentary_dialog)
 
     # --- 弹出卡片（懒创建 + 几何持久化） ---
 
@@ -148,6 +150,12 @@ class MainWindow(QMainWindow):
         self._stats_dialog.raise_()
         self._stats_dialog.activateWindow()
 
+    def show_commentary_dialog(self) -> None:
+        from .widgets.commentary_dialog import CommentaryDialog
+        dlg = CommentaryDialog(self._settings, self._ai, self._storage, self)
+        dlg.settings_changed.connect(self.settings_changed)
+        dlg.exec()
+
     # --- 主窗口控制 ---
 
     def _on_rules_changed_internal(self) -> None:
@@ -169,6 +177,8 @@ class MainWindow(QMainWindow):
         # 主窗口隐藏时概览不再刷新（性能优化），show 时补齐一次
         self.overview.refresh_bars()
         self.overview.refresh_pending_count()
+        # 每次打开窗口刷新今日点评（后台隐藏时不触发）
+        self.overview.refresh_commentary()
 
     def jump_to_overview(self) -> None:
         self._tabs.setCurrentIndex(0)

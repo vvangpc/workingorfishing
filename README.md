@@ -19,6 +19,7 @@ Windows 桌面活动追踪工具——回答一个问题：
 - **前台窗口轮询**：默认每 10 秒采样一次进程名、窗口标题
 - **浏览器 URL 抓取**：通过 UI Automation 读取 Chrome / Edge / Brave / Firefox / Vivaldi / Opera 的地址栏（含坚果云式 a11y 自动唤醒 + 控件缓存）
 - **键鼠空闲检测**：超过阈值（默认 5 分钟）自动标 `idle`，不算工作时长
+- **定时自动暂停**：配置每天生效的时间段（如午餐 12:00–13:00），到点自动暂停采样、过点自动恢复，避免固定离开时段被错误记录（支持多时段、跨午夜；设置 → 启动与界面 → 自动暂停设置）
 
 ### 分类
 - **规则引擎**：`process` / `title_regex` / `url_regex` 三种匹配字段，可组合可优先级排序
@@ -29,6 +30,7 @@ Windows 桌面活动追踪工具——回答一个问题：
 
 ### 可视化
 - **概览页**：当前状态卡 + 今日横条形图（工作 / 摸鱼 / 中立 / 空闲）+ 待确定徽章
+- **AI 今日点评**：概览底部卡片，依据今日工作 / 摸鱼占比由大模型生成一句点评，每次打开主窗口刷新（后台隐藏时不调用、省 token）；内置幽默 / 严肃 / 毒舌 / 鼓励多种风格，也可自定义提示词（设置 → 工具 → AI 评语）
 - **桌面悬浮窗**：
   - 两套主题：**文字**（彩色圆角条 + 时长）/ **图片**（`assets/floating/float_*.png` 状态贴图）
   - 当前状态色 + 当日累计时长
@@ -149,14 +151,14 @@ pyinstaller --noconfirm packaging/onefile.spec
 
 ```powershell
 pyinstaller --noconfirm packaging/onedir.spec
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=0.2.0 packaging/installer.iss
-# 产物：dist/installer/WorkingorFishing-Setup-0.2.0.exe
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=0.4.0 packaging/installer.iss
+# 产物：dist/installer/WorkingorFishing-Setup-0.4.0.exe
 ```
 
 或者打个 tag 让 GitHub Actions 自动构建并发布：
 
 ```powershell
-git tag v0.2 && git push origin v0.2
+git tag v0.4 && git push origin v0.4
 ```
 
 ---

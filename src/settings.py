@@ -67,6 +67,12 @@ class AISettings:
 
 
 @dataclass
+class CommentarySettings:
+    style: str = "humorous"     # humorous / serious / sarcastic / encouraging / custom
+    custom_prompt: str = ""     # style == "custom" 时使用
+
+
+@dataclass
 class PauseRange:
     start: str = "12:00"   # "HH:MM"
     end: str = "13:00"     # "HH:MM"，end < start 视为跨午夜
@@ -95,6 +101,7 @@ class Settings:
     autostart: bool = False
     paused: bool = False
     auto_pause: AutoPauseSettings = field(default_factory=AutoPauseSettings)
+    commentary: CommentarySettings = field(default_factory=CommentarySettings)
     floating_window: FloatingSettings = field(default_factory=FloatingSettings)
     ai: AISettings = field(default_factory=AISettings)
     webdav: WebDAVSettings = field(default_factory=WebDAVSettings)
@@ -155,6 +162,12 @@ class Settings:
             ranges=ap_ranges,
         )
 
+        cm_data = data.get("commentary") or {}
+        commentary = CommentarySettings(
+            style=str(cm_data.get("style") or "humorous"),
+            custom_prompt=str(cm_data.get("custom_prompt", "")),
+        )
+
         geom = data.get("window_geometry") or {}
         if not isinstance(geom, dict):
             geom = {}
@@ -174,6 +187,7 @@ class Settings:
             autostart=bool(data.get("autostart", False)),
             paused=bool(data.get("paused", False)),
             auto_pause=auto_pause,
+            commentary=commentary,
             floating_window=fw,
             ai=ai,
             webdav=webdav,
@@ -191,6 +205,8 @@ class Settings:
         self.paused = fresh.paused
         self.auto_pause.enabled = fresh.auto_pause.enabled
         self.auto_pause.ranges = list(fresh.auto_pause.ranges)
+        self.commentary.style = fresh.commentary.style
+        self.commentary.custom_prompt = fresh.commentary.custom_prompt
         # 子 dataclass 原地 mutate
         self.floating_window.__dict__.update(fresh.floating_window.__dict__)
         self.ai.__dict__.update(fresh.ai.__dict__)
