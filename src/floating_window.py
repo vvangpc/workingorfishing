@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .paths import floating_image
+from .paths import APP_DISPLAY_NAME, floating_image
 from .settings import Settings
 from .storage import Storage, day_range
 from .tray import STATE_COLORS, STATE_LABELS
@@ -158,7 +158,7 @@ class FloatingWindow(QWidget):
             | Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setWindowTitle("WorkingorFishing")
+        self.setWindowTitle(APP_DISPLAY_NAME)
 
         # 文字主题：彩色圆角条 + 文字
         # 图片主题：用 assets/floating/float_<state>.png 渲染

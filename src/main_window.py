@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCloseEvent, QHideEvent
+from PySide6.QtGui import QCloseEvent, QHideEvent, QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QMainWindow,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from .ai_classifier import AIClassifier
 from .classifier import Classifier
+from .paths import APP_DISPLAY_NAME, icon_file
 from .settings import Settings, restore_geometry, save_geometry
 from .stats_window import StatsTab
 from .storage import Storage
@@ -61,7 +62,10 @@ class MainWindow(QMainWindow):
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("WorkingorFishing")
+        self.setWindowTitle(APP_DISPLAY_NAME)
+        _ico = QIcon(str(icon_file()))
+        if not _ico.isNull():
+            self.setWindowIcon(_ico)
 
         self._storage = storage
         self._classifier = classifier

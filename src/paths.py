@@ -75,6 +75,11 @@ def db_file() -> Path:
     return data_dir() / "activity.db"
 
 
+# 品牌展示名（用户可见）；内部标识符仍用 "WorkingorFishing" 不变
+APP_DISPLAY_NAME = "划水记 · WorkingorFishing"
+APP_SHORT_NAME = "划水记"
+
+
 def icon_file() -> Path:
     return assets_dir() / "icon.ico"
 

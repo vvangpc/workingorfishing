@@ -5,6 +5,7 @@ import logging
 import sys
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 import shutil
@@ -25,7 +26,7 @@ from .data_io import (
 )
 from .floating_window import FloatingWindow
 from .main_window import MainWindow
-from .paths import db_file, rules_file, settings_file
+from .paths import APP_SHORT_NAME, db_file, icon_file, rules_file, settings_file
 from .settings import Settings
 from .single_instance import try_acquire
 from .storage import Storage
@@ -48,6 +49,9 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("WorkingorFishing")
+    _app_icon = QIcon(str(icon_file()))
+    if not _app_icon.isNull():
+        app.setWindowIcon(_app_icon)
 
     # 单实例守护：拿不到锁就退出（已通知已有实例前台显示）
     singleton = try_acquire()
@@ -56,7 +60,7 @@ def main() -> int:
         return 0
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
-        QMessageBox.critical(None, "WorkingorFishing", "系统托盘不可用，程序无法运行。")
+        QMessageBox.critical(None, APP_SHORT_NAME, "系统托盘不可用，程序无法运行。")
         return 1
 
     settings = Settings.load()
@@ -396,7 +400,7 @@ def main() -> int:
     # 启动即评估自动暂停日程（如启动时正处于配置时段则立即暂停）
     collector.configure_schedules(settings.auto_pause)
 
-    tray.show_message("WorkingorFishing", "已启动，正在监控前台窗口")
+    tray.show_message(APP_SHORT_NAME, "已启动，正在监控前台窗口")
 
     if not classifier.get_rules():
         QTimer.singleShot(500, show_main)

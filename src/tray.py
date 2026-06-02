@@ -5,7 +5,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
-from .paths import icon_file
+from .paths import APP_DISPLAY_NAME, APP_SHORT_NAME, icon_file
 
 
 STATE_COLORS = {
@@ -53,7 +53,7 @@ class Tray(QObject):
         self._base_icon = base if not base.isNull() else self._icons["neutral"]
 
         self._tray = QSystemTrayIcon(self._base_icon, parent)
-        self._tray.setToolTip("WorkingorFishing")
+        self._tray.setToolTip(APP_DISPLAY_NAME)
 
         menu = QMenu()
         act_main = QAction("打开主窗口（概览）", menu)
@@ -96,7 +96,7 @@ class Tray(QObject):
         icon = self._icons.get(state, self._base_icon)
         self._tray.setIcon(icon)
         label = STATE_LABELS.get(state, state)
-        self._tray.setToolTip(f"WorkingorFishing - {label}")
+        self._tray.setToolTip(f"{APP_SHORT_NAME} - {label}")
 
     def update_paused(self, paused: bool) -> None:
         self._act_pause.setText("恢复采集" if paused else "暂停采集")
