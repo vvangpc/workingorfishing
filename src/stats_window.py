@@ -150,6 +150,8 @@ class _StatsView(QWidget):
         self._mode = mode
         self._anchor = datetime.now()
         self._current_range: tuple[int, int] = (0, 0)
+        # 惰性刷新：不可见时只打脏标记，showEvent 时补刷（规则频繁变更时省 3 组日/周/月全量查询）
+        self._dirty = True
 
         # --- 顶部控件 ---
         self._date_edit = QDateEdit()
@@ -287,6 +289,10 @@ class _StatsView(QWidget):
         return month_range(self._anchor)
 
     def refresh(self) -> None:
+        if not self.isVisible():
+            self._dirty = True
+            return
+        self._dirty = False
         start, end = self._resolve_range()
         self._current_range = (start, end)
         totals = self._storage.aggregate_range(start, end, self._sample_interval)
@@ -294,6 +300,11 @@ class _StatsView(QWidget):
         self._render_bar(start, end)
         self._render_tree(start, end, totals)
         self._render_summary(totals)
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        if self._dirty:
+            self.refresh()
 
     # --- 饼图 ---
 

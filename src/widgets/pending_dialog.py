@@ -105,6 +105,9 @@ class PendingDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("待确定的活动")
+        # 关闭即销毁：否则每次打开都新建实例且 suggestion_ready 连接永不断开，
+        # 旧实例会在每条 AI 建议到达时重复查库重建表格（销毁时 Qt 自动断开信号）
+        self.setAttribute(Qt.WA_DeleteOnClose)
         self.resize(1000, 580)
         self.setStyleSheet(_DIALOG_QSS)
         self._storage = storage
@@ -343,62 +346,68 @@ class PendingDialog(QDialog):
         created = backfilled = skipped = errors = 0
         first_error_msg = ""
 
-        for i, rec in enumerate(rows):
-            if progress.wasCanceled():
-                break
-            tag = (rec["process"] or rec["sample_url"] or rec["sample_title"] or "?")[:40]
-            progress.setLabelText(f"AI 判断 {i + 1}/{len(rows)}: {tag}")
-            progress.setValue(i)
-            QApplication.processEvents()
+        # 循环内 add_rule 不落盘（save=False），结束后统一 save 一次，
+        # 避免 N 条规则触发 N 次 rules.yaml 全量重写
+        try:
+            for i, rec in enumerate(rows):
+                if progress.wasCanceled():
+                    break
+                tag = (rec["process"] or rec["sample_url"] or rec["sample_title"] or "?")[:40]
+                progress.setLabelText(f"AI 判断 {i + 1}/{len(rows)}: {tag}")
+                progress.setValue(i)
+                QApplication.processEvents()
 
-            sample = {
-                "process": rec["process"],
-                "title": rec["sample_title"],
-                "url": rec["sample_url"],
-            }
-            try:
-                sug, raw = self._ai.test(sample)
-            except Exception as e:
-                errors += 1
-                if not first_error_msg:
-                    first_error_msg = f"调用异常: {e}"
-                continue
-            if sug is None:
-                errors += 1
-                if not first_error_msg:
-                    first_error_msg = (raw or "返回为空")[:200]
-                continue
-
-            self._suggestions[self._sug_key(rec["process"], rec["sample_url"], rec["sample_title"])] = sug
-
-            proc_field = sug.suggested_process
-            title_field = sug.suggested_title_regex
-            url_field = sug.suggested_url_regex
-            if not any((proc_field, title_field, url_field)):
-                if rec["process"]:
-                    proc_field = rec["process"]
-                else:
-                    skipped += 1
+                sample = {
+                    "process": rec["process"],
+                    "title": rec["sample_title"],
+                    "url": rec["sample_url"],
+                }
+                try:
+                    sug, raw = self._ai.test(sample)
+                except Exception as e:
+                    errors += 1
+                    if not first_error_msg:
+                        first_error_msg = f"调用异常: {e}"
                     continue
-            if url_field and proc_field and proc_field.lower() in {
-                "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
-                "opera.exe", "vivaldi.exe",
-            }:
-                proc_field = None
+                if sug is None:
+                    errors += 1
+                    if not first_error_msg:
+                        first_error_msg = (raw or "返回为空")[:200]
+                    continue
 
-            rule = Rule.new(
-                category=sug.category,
-                process=proc_field,
-                title_regex=title_field,
-                url_regex=url_field,
-                priority=200,
-                source=SOURCE_AI,
-                note=(sug.reason or "AI auto")[:80],
-            )
-            self._classifier.add_rule(rule)
-            n = self._storage.reclassify_by_rule(rule, only_unknown=True)
-            created += 1
-            backfilled += n
+                self._suggestions[self._sug_key(rec["process"], rec["sample_url"], rec["sample_title"])] = sug
+
+                proc_field = sug.suggested_process
+                title_field = sug.suggested_title_regex
+                url_field = sug.suggested_url_regex
+                if not any((proc_field, title_field, url_field)):
+                    if rec["process"]:
+                        proc_field = rec["process"]
+                    else:
+                        skipped += 1
+                        continue
+                if url_field and proc_field and proc_field.lower() in {
+                    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
+                    "opera.exe", "vivaldi.exe",
+                }:
+                    proc_field = None
+
+                rule = Rule.new(
+                    category=sug.category,
+                    process=proc_field,
+                    title_regex=title_field,
+                    url_regex=url_field,
+                    priority=200,
+                    source=SOURCE_AI,
+                    note=(sug.reason or "AI auto")[:80],
+                )
+                self._classifier.add_rule(rule, save=False)
+                n = self._storage.reclassify_by_rule(rule, only_unknown=True)
+                created += 1
+                backfilled += n
+        finally:
+            if created:
+                self._classifier.save()
 
         progress.setValue(len(rows))
         summary = (

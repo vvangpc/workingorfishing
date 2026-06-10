@@ -344,23 +344,25 @@ class OverviewTab(QWidget):
             self._btn_pending.setStyleSheet("")
 
     def _open_pending_dialog(self) -> None:
-        if self._pending_dialog is None or not self._pending_dialog.isVisible():
-            self._pending_dialog = PendingDialog(
-                self._storage,
-                self._classifier,
-                self._ai,
-                self._suggestions,
-                parent=self,
-            )
-            self._pending_dialog.rules_changed.connect(self._on_pending_changed)
-            self._pending_dialog.open_ai_settings_requested.connect(
-                self.open_ai_settings_requested
-            )
-            self._pending_dialog.finished.connect(self._on_pending_closed)
-            self._pending_dialog.show()
-        else:
+        # PendingDialog 设了 WA_DeleteOnClose：关闭即销毁，finished 信号已把引用置 None，
+        # 这里只判 None（不要再碰可能已删除的旧对象）
+        if self._pending_dialog is not None:
             self._pending_dialog.raise_()
             self._pending_dialog.activateWindow()
+            return
+        self._pending_dialog = PendingDialog(
+            self._storage,
+            self._classifier,
+            self._ai,
+            self._suggestions,
+            parent=self,
+        )
+        self._pending_dialog.rules_changed.connect(self._on_pending_changed)
+        self._pending_dialog.open_ai_settings_requested.connect(
+            self.open_ai_settings_requested
+        )
+        self._pending_dialog.finished.connect(self._on_pending_closed)
+        self._pending_dialog.show()
 
     def _on_pending_changed(self) -> None:
         self.refresh_pending_count()
@@ -373,8 +375,13 @@ class OverviewTab(QWidget):
 
     # --- AI 建议接入 ---
 
+    # 建议字典封顶：超过即按插入序淘汰最旧（防动态标题导致无限增长）
+    _SUGGESTIONS_MAX = 500
+
     def _on_suggestion(self, sug: AISuggestion) -> None:
         key = self._sug_key(sug.process, sug.url, sug.title)
+        while len(self._suggestions) >= self._SUGGESTIONS_MAX:
+            self._suggestions.pop(next(iter(self._suggestions)))
         self._suggestions[key] = sug
         self.refresh_pending_count()
 

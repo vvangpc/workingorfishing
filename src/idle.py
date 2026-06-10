@@ -19,7 +19,8 @@ def idle_seconds() -> float:
     if not _user32.GetLastInputInfo(ctypes.byref(info)):
         return 0.0
     tick = _kernel32.GetTickCount()
-    return max(0.0, (tick - info.dwTime) / 1000.0)
+    # GetTickCount 为 32 位毫秒，约 49.7 天回绕一次；按模减避免回绕后差值变负
+    return ((tick - info.dwTime) & 0xFFFFFFFF) / 1000.0
 
 
 def is_idle(threshold_seconds: float) -> bool:

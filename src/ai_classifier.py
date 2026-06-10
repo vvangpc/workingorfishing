@@ -61,11 +61,33 @@ class AIClassifier(QObject):
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._stats = {"calls": 0, "errors": 0, "last_error": ""}
+        self._queue_full_warned = False
+        # 正在生成点评的 signal id 集合（按信号区分：概览 / 预览互不阻塞）
+        self._commentary_busy: set[int] = set()
+        # 复用的 HTTP 客户端（连接池 + SSL context 只建一次）
+        self._client: Optional[httpx.Client] = None
+        self._client_lock = threading.Lock()
 
     # --- 控制 ---
 
     def configure(self, settings: AISettings) -> None:
         self._settings = settings
+        self._close_client()  # 端点可能变更，丢弃旧连接池
+
+    def _get_client(self) -> httpx.Client:
+        with self._client_lock:
+            if self._client is None:
+                self._client = httpx.Client()
+            return self._client
+
+    def _close_client(self) -> None:
+        with self._client_lock:
+            client, self._client = self._client, None
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
     @property
     def is_ready(self) -> bool:
@@ -88,16 +110,23 @@ class AIClassifier(QObject):
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
+        self._close_client()
         logger.info("AIClassifier stopped")
 
     def enqueue(self, sample: dict) -> None:
-        """sample: {process, title, url}。enabled=False 时不入队。"""
+        """sample: {process, title, url}。enabled=False 时不入队。队满丢弃（只在进入满状态时记一次日志）。"""
         if not self._settings.enabled:
             return
         try:
             self._queue.put_nowait(sample)
+            self._queue_full_warned = False
         except Exception:
-            pass
+            if not self._queue_full_warned:
+                self._queue_full_warned = True
+                logger.warning(
+                    "AI queue full (%d), dropping unknown samples until it drains",
+                    self._queue.maxsize,
+                )
 
     def queue_size(self) -> int:
         return self._queue.qsize()
@@ -144,10 +173,9 @@ class AIClassifier(QObject):
             "Content-Type": "application/json",
         }
         try:
-            with httpx.Client(timeout=timeout) as client:
-                resp = client.post(url, json=body, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = self._get_client().post(url, json=body, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
             content = data["choices"][0]["message"]["content"]
         except Exception as e:
             return None, f"调用失败: {e}"
@@ -250,10 +278,9 @@ class AIClassifier(QObject):
             "Authorization": f"Bearer {s.api_key}",
             "Content-Type": "application/json",
         }
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post(url, json=body, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        resp = self._get_client().post(url, json=body, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
@@ -273,6 +300,11 @@ class AIClassifier(QObject):
         if not self.is_ready:
             signal.emit("")
             return
+        # 单飞：同一信号已有生成中的请求就丢弃（防反复开窗导致线程堆积）
+        sig_key = id(signal)
+        if sig_key in self._commentary_busy:
+            return
+        self._commentary_busy.add(sig_key)
 
         def _gen():
             try:
@@ -281,6 +313,8 @@ class AIClassifier(QObject):
             except Exception as e:
                 logger.warning("commentary generation failed: %s", e)
                 signal.emit("")
+            finally:
+                self._commentary_busy.discard(sig_key)
 
         threading.Thread(target=_gen, daemon=True, name="Commentary").start()
 

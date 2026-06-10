@@ -159,6 +159,8 @@ class MainWindow(QMainWindow):
         dlg = CommentaryDialog(self._settings, self._ai, self._storage, self)
         dlg.settings_changed.connect(self.settings_changed)
         dlg.exec()
+        # parent 持有引用，不销毁会随每次打开累积（且 AI 预览信号连接不断开）
+        dlg.deleteLater()
 
     # --- 主窗口控制 ---
 

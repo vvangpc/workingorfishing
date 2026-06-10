@@ -34,12 +34,18 @@ from .tray import Tray
 
 
 def _configure_logging() -> None:
+    from logging.handlers import RotatingFileHandler
+
     from .paths import data_root
     log_file = data_root() / "app.log"
+    # 轮转日志：常驻进程必须封顶日志体积（2MB × 3 份）
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=2 * 1024 * 1024, backupCount=2, encoding="utf-8"
+    )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.FileHandler(log_file, encoding="utf-8"), logging.StreamHandler()],
+        handlers=[file_handler, logging.StreamHandler()],
     )
 
 
@@ -139,11 +145,12 @@ def main() -> int:
     def quit_app() -> None:
         collector.stop()
         ai.stop()
-        storage.close()
+        # 先停悬浮窗定时器再关库，避免关库后 _tick 再查询
         try:
             floating.close_overlay()
         except Exception:
             pass
+        storage.close()
         try:
             singleton.stop()
         except Exception:
@@ -188,8 +195,8 @@ def main() -> int:
     main_win.settings_changed.connect(on_settings_changed)
 
     def on_rules_changed() -> None:
+        # 统计刷新由 MainWindow._on_rules_changed_internal 负责，这里只清去重表
         collector.clear_unknown_seen()
-        main_win.stats_widget.refresh_all()
 
     main_win.rules_changed.connect(on_rules_changed)
 

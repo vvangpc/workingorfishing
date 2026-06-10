@@ -15,6 +15,8 @@ import logging
 import re
 import threading
 import time
+from queue import Queue
+from time import monotonic
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -178,27 +180,96 @@ def _find_address_edit(window, names: tuple[str, ...]):
     return None
 
 
-def _read_url_with_timeout(fn: Callable[[], Optional[str]], timeout: float = 3.0) -> Optional[str]:
-    """在独立线程里执行 fn，超时返回 None。UI Automation 偶发会卡死。"""
-    result: list[Optional[str]] = [None]
-    err: list[Optional[BaseException]] = [None]
+class _UrlRequest:
+    __slots__ = ("fn", "done", "result", "error", "abandoned")
 
-    def runner():
+    def __init__(self, fn: Callable[[], Optional[str]]):
+        self.fn = fn
+        self.done = threading.Event()
+        self.result: Optional[str] = None
+        self.error: Optional[BaseException] = None
+        self.abandoned = False
+
+
+class _UrlReader:
+    """单一常驻 UIA 读取线程 + 串行请求。
+
+    旧实现每次采样都新建线程，UIA 卡死时线程被遗弃、无上限累积。
+    现在挂死最多占用一个线程；持续挂死超过 _REPLACE_AFTER 秒才换一个新线程
+    （旧僵尸等 UIA 调用返回后自行闲置），URL 读取期间主流程只等 timeout 秒。
+    """
+
+    _REPLACE_AFTER = 120.0
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._queue: Queue = Queue(maxsize=1)
+        self._thread: Optional[threading.Thread] = None
+        self._busy_since: float = 0.0  # monotonic；0 = 空闲
+        self._gen = 0
+
+    def _loop(self, q: Queue, gen: int) -> None:
+        # com_ctx 持有引用保持本线程 COM 初始化状态（析构时反初始化）
+        com_ctx = None
         try:
-            result[0] = fn()
-        except BaseException as e:
-            err[0] = e
+            uia = _get_uia()
+            com_ctx = uia.UIAutomationInitializerInThread()
+        except Exception:
+            pass  # comtypes 会在首次调用时按需初始化 COM
+        logger.debug("url reader thread started (gen=%d, com=%s)", gen, com_ctx is not None)
+        while True:
+            req: _UrlRequest = q.get()
+            if not req.abandoned:
+                try:
+                    req.result = req.fn()
+                except BaseException as e:
+                    req.error = e
+            req.done.set()
+            with self._lock:
+                if self._gen == gen:
+                    self._busy_since = 0.0
 
-    t = threading.Thread(target=runner, daemon=True)
-    t.start()
-    t.join(timeout)
-    if t.is_alive():
-        logger.debug("browser url read timed out")
-        return None
-    if err[0]:
-        logger.debug("browser url read error: %s", err[0])
-        return None
-    return result[0]
+    def _start_thread_locked(self) -> None:
+        self._gen += 1
+        self._queue = Queue(maxsize=1)
+        self._thread = threading.Thread(
+            target=self._loop, args=(self._queue, self._gen),
+            daemon=True, name="UrlReader",
+        )
+        self._thread.start()
+        self._busy_since = 0.0
+
+    def read(self, fn: Callable[[], Optional[str]], timeout: float = 3.0) -> Optional[str]:
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._start_thread_locked()
+            elif self._busy_since:
+                if monotonic() - self._busy_since > self._REPLACE_AFTER:
+                    logger.warning("url reader hung > %.0fs, replacing thread", self._REPLACE_AFTER)
+                    self._start_thread_locked()
+                else:
+                    # 上一个请求还挂在 UIA 调用里，跳过本次采样
+                    logger.debug("url reader busy, skipping this sample")
+                    return None
+            req = _UrlRequest(fn)
+            self._busy_since = monotonic()
+            self._queue.put_nowait(req)
+        if not req.done.wait(timeout):
+            req.abandoned = True
+            logger.debug("browser url read timed out")
+            return None
+        if req.error:
+            logger.debug("browser url read error: %s", req.error)
+            return None
+        return req.result
+
+
+_url_reader = _UrlReader()
+
+
+def _read_url_with_timeout(fn: Callable[[], Optional[str]], timeout: float = 3.0) -> Optional[str]:
+    """在常驻读取线程里执行 fn，超时返回 None。UI Automation 偶发会卡死。"""
+    return _url_reader.read(fn, timeout)
 
 
 def _normalize(raw: Optional[str]) -> Optional[str]:

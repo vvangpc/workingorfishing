@@ -387,7 +387,11 @@ class FloatingWindow(QWidget):
         return bool(self._settings.floating_window.click_through)
 
     def close_overlay(self) -> None:
-        """退出程序时清理 overlay 顶层窗口。"""
+        """退出程序时清理：先停心跳定时器（防关库后再查询），再清 overlay 顶层窗口。"""
+        try:
+            self._tick_timer.stop()
+        except Exception:
+            pass
         try:
             self._info.close()
             self._info.deleteLater()

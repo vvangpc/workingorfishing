@@ -137,41 +137,49 @@ class WebDAVClient:
         if not ok:
             return False, f"{remote_name}: {msg}"
         try:
-            with open(local_path, "rb") as f:
-                content = f.read()
+            size = local_path.stat().st_size
             target = self.url + remote_name
-            r = httpx.put(
-                target, content=content,
-                auth=self.auth, timeout=self.timeout,
-            )
-            if r.status_code in (200, 201, 204):
-                return True, f"{remote_name}: 上传 OK ({len(content)} bytes)"
-            # 404 兜底：再尝试一次 MKCOL 然后重 PUT
-            if r.status_code == 404:
-                self._dir_ensured = False
-                self._ensure_dir()
-                r = httpx.put(target, content=content, auth=self.auth, timeout=self.timeout)
+            # 传文件对象流式上传（httpx 对可 seek 文件自动设 Content-Length），
+            # 避免把整个 activity.db（可达上百 MB）读进内存
+            with open(local_path, "rb") as f:
+                r = httpx.put(
+                    target, content=f,
+                    auth=self.auth, timeout=self.timeout,
+                )
                 if r.status_code in (200, 201, 204):
-                    return True, f"{remote_name}: 上传 OK ({len(content)} bytes)"
+                    return True, f"{remote_name}: 上传 OK ({size} bytes)"
+                # 404 兜底：再尝试一次 MKCOL 然后重 PUT
+                if r.status_code == 404:
+                    self._dir_ensured = False
+                    self._ensure_dir()
+                    f.seek(0)
+                    r = httpx.put(target, content=f, auth=self.auth, timeout=self.timeout)
+                    if r.status_code in (200, 201, 204):
+                        return True, f"{remote_name}: 上传 OK ({size} bytes)"
             return False, f"{remote_name}: HTTP {r.status_code}"
         except Exception as e:
             return False, f"{remote_name}: {e}"
 
     def download(self, remote_name: str, local_path: Path) -> tuple[bool, str]:
         try:
-            r = httpx.get(
+            # 流式下载分块落盘，避免大文件整个读进内存
+            with httpx.stream(
+                "GET",
                 self.url + remote_name,
                 auth=self.auth,
                 timeout=self.timeout,
-            )
-            if r.status_code == 200:
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(local_path, "wb") as f:
-                    f.write(r.content)
-                return True, f"{remote_name}: 下载 OK ({len(r.content)} bytes)"
-            if r.status_code == 404:
-                return False, f"{remote_name}: 远端不存在 (404)"
-            return False, f"{remote_name}: HTTP {r.status_code}"
+            ) as r:
+                if r.status_code == 200:
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    written = 0
+                    with open(local_path, "wb") as f:
+                        for chunk in r.iter_bytes():
+                            f.write(chunk)
+                            written += len(chunk)
+                    return True, f"{remote_name}: 下载 OK ({written} bytes)"
+                if r.status_code == 404:
+                    return False, f"{remote_name}: 远端不存在 (404)"
+                return False, f"{remote_name}: HTTP {r.status_code}"
         except Exception as e:
             return False, f"{remote_name}: {e}"
 

@@ -17,17 +17,27 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+_portable_cache: bool | None = None
+
+
 def _is_portable() -> bool:
-    """打包成 exe 且同目录可写视为便携模式。开发模式始终走项目目录。"""
+    """打包成 exe 且同目录可写视为便携模式。开发模式始终走项目目录。
+
+    结果缓存：否则每次 settings.save() 等路径解析都要做一次磁盘写探测。"""
+    global _portable_cache
+    if _portable_cache is not None:
+        return _portable_cache
     if not _frozen():
+        _portable_cache = True
         return True
     probe = app_dir() / ".write_probe"
     try:
         probe.touch()
         probe.unlink()
-        return True
+        _portable_cache = True
     except OSError:
-        return False
+        _portable_cache = False
+    return _portable_cache
 
 
 def data_root() -> Path:
